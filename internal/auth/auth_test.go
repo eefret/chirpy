@@ -2,7 +2,10 @@ package auth
 
 import (
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -30,4 +33,42 @@ func TestCheckPasswordHash(t *testing.T) {
 	if err := CheckPasswordHash(invalidPassword, hashedPassword); err == nil {
 		t.Fatal("expected an error for wrong password, got nil")
 	}
+}
+
+// TestMakeJWT ensures that a token can be created and validated successfully.
+func TestMakeJWT(t *testing.T) {
+	tokenSecret := "supersecret"
+	userID := uuid.New()
+	expiresIn := time.Minute
+
+	token, err := MakeJWT(userID, tokenSecret, expiresIn)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, token)
+
+	parsedUserID, err := ValidateJWT(token, tokenSecret)
+	assert.NoError(t, err)
+	assert.Equal(t, userID, parsedUserID)
+}
+
+// TestValidateJWTInvalidToken ensures that an invalid token is rejected.
+func TestValidateJWTInvalidToken(t *testing.T) {
+	tokenSecret := "supersecret"
+	invalidToken := "invalid.token.here"
+
+	_, err := ValidateJWT(invalidToken, tokenSecret)
+	assert.Error(t, err)
+}
+
+// TestValidateJWTExpiredToken ensures that expired tokens are rejected.
+func TestValidateJWTExpiredToken(t *testing.T) {
+	tokenSecret := "supersecret"
+	userID := uuid.New()
+	expiredTime := -time.Minute // Token expired 1 minute ago
+
+	token, err := MakeJWT(userID, tokenSecret, expiredTime)
+	assert.NoError(t, err)
+
+	_, err = ValidateJWT(token, tokenSecret)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "token is expired")
 }
