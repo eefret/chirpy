@@ -47,6 +47,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", cfg.handleCreateUser)
 	mux.HandleFunc("GET /api/chirps", cfg.handleChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handleGetChirp)
+	mux.HandleFunc("POST /api/login", cfg.handleLogin)
 
 	println("Starting server on :8080")
 

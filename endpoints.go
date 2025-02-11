@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/eefret/chirpy/internal/auth"
 	"github.com/eefret/chirpy/internal/database"
 	"github.com/google/uuid"
 )
@@ -134,7 +135,8 @@ func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	type CreateUserRequest struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -146,12 +148,21 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.Email == "" {
-		respondWithError(w, http.StatusBadRequest, "Email is required")
+	if request.Email == "" && request.Password == "" {
+		respondWithError(w, http.StatusBadRequest, "Email and Password are required")
 		return
 	}
 
-	u, err := cfg.DB.CreateUser(r.Context(), request.Email)
+	hashedPassword, err := auth.HashPassword(request.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+		return
+	}
+
+	u, err := cfg.DB.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          request.Email,
+		HashedPassword: hashedPassword,
+	})
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
 		return
@@ -208,5 +219,45 @@ func (cfg *apiConfig) handleGetChirp(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: chirp.UpdatedAt.Time,
 		Body:      chirp.Body,
 		UserID:    chirp.UserID,
+	})
+}
+
+func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
+	type LoginRequest struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	request := LoginRequest{}
+
+	err := decoder.Decode(&request)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if request.Email == "" && request.Password == "" {
+		respondWithError(w, http.StatusBadRequest, "Email and Password are required")
+		return
+	}
+
+	u, err := cfg.DB.GetUserByEmail(r.Context(), request.Email)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+		return
+	}
+
+	err = auth.CheckPasswordHash(request.Password, u.HashedPassword)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, User{
+		ID:        u.ID,
+		CreatedAt: u.CreatedAt.Time,
+		UpdatedAt: u.UpdatedAt.Time,
+		Email:     u.Email,
 	})
 }
