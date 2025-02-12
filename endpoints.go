@@ -17,6 +17,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token,omitempty"`
 }
 
 type Chirp struct {
@@ -85,13 +86,29 @@ func (cfg *apiConfig) handleReset(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, r *http.Request) {
 	type requestBody struct {
 		Body    string    `json:"body"`
-		UserID  uuid.UUID `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
 	request := requestBody{}
 
-	err := decoder.Decode(&request)
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	id, err := auth.ValidateJWT(token, cfg.authSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid token")
+		return
+	}
+
+	// if userID != request.UserID {
+	// 	respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+	// 	return
+	// }
+
+	err = decoder.Decode(&request)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Something went wrong")
 		return
@@ -117,7 +134,7 @@ func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, r *http.Request) 
 
 	chirp, err := cfg.DB.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:    cleanedText,
-		UserID:  request.UserID,
+		UserID:  id,
 	})
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not create chirp")
@@ -226,7 +243,7 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 	type LoginRequest struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
-		ExpiresInSeconds int `json:"expires_in_seconds"`
+		ExpiresInSeconds int `json:"expires_in_seconds,omitempty"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -238,7 +255,7 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.Email == "" && request.Password == "" {
+	if request.Email == "" || request.Password == "" {
 		respondWithError(w, http.StatusBadRequest, "Email and Password are required")
 		return
 	}
@@ -255,10 +272,22 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expiration := time.Hour
+	if request.ExpiresInSeconds > 0 && request.ExpiresInSeconds <= 3600 {
+		expiration = time.Duration(request.ExpiresInSeconds) * time.Second
+	}
+
+	jwt, err := auth.MakeJWT(u.ID, cfg.authSecret, expiration)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not get JWT")
+		return
+	}
+
 	respondWithJSON(w, http.StatusOK, User{
 		ID:        u.ID,
 		CreatedAt: u.CreatedAt.Time,
 		UpdatedAt: u.UpdatedAt.Time,
 		Email:     u.Email,
+		Token:     jwt,
 	})
 }
