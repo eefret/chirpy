@@ -13,7 +13,8 @@ import (
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
-	DB *database.Queries
+	DB             *database.Queries
+	authSecret     string
 }
 
 
@@ -34,6 +35,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	cfg.authSecret = os.Getenv("AUTH_SECRET")
 
 	cfg.DB = database.New(db)
 
