@@ -15,6 +15,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	DB             *database.Queries
 	authSecret     string
+	polkaKey       string
 }
 
 
@@ -40,6 +41,7 @@ func main() {
 	}
 
 	cfg.authSecret = os.Getenv("AUTH_SECRET")
+	cfg.polkaKey = os.Getenv("POLKA_KEY")
 
 	cfg.DB = database.New(db)
 

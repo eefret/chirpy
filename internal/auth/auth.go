@@ -76,6 +76,20 @@ func GetBearerToken(headers http.Header) (string, error) {
 	return parts[1], nil
 }
 
+func GetAPIKey(headers http.Header) (string, error) {
+	apiKey := headers.Get("Authorization")
+	if apiKey == "" {
+		return "", errors.New("missing Authorization header")
+	}
+
+	parts := strings.Split(apiKey, " ")
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "apikey" {
+		return "", errors.New("invalid Authorization header")
+	}
+
+	return parts[1], nil
+}
+
 func MakeRefreshToken() (string, error) {
 	// rand.Read to generate 32 bytes (256 bits) of random data from the crypto/rand package (math/rand’s Read function is deprecated).
 	randomBytes := make([]byte, 32)

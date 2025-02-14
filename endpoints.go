@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"time"
 
 	"github.com/eefret/chirpy/internal/auth"
@@ -41,7 +42,7 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.WriteHeader(code)
 	_, err = w.Write(dat)
 	if err != nil {
-		fmt.Println("Error writing response:", err)
+		return
 	}
 }
 
@@ -199,18 +200,41 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		IsRed:    u.IsRed,
 	}
 
-	fmt.Println(u)
-	fmt.Println(user)
-
 	respondWithJSON(w, http.StatusCreated, user)
 }
 
 func (cfg *apiConfig) handleChirps(w http.ResponseWriter, r *http.Request) {
+	var authorID uuid.UUID
+	var err error
 
-	chirps, err := cfg.DB.GetChirps(r.Context())
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
-		return
+	auid := r.URL.Query().Get("author_id")
+
+	if auid != "" {
+		authorID, err = uuid.Parse(auid)
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, "Invalid author ID")
+			return
+		}
+	}
+
+	sortOrder := r.URL.Query().Get("sort")
+    if sortOrder == "" {
+        sortOrder = "asc"
+    }
+
+	var chirps []database.Chirp
+	if authorID != uuid.Nil {
+		chirps, err = cfg.DB.GetChirpsByAuthor(r.Context(), authorID)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
+	} else {
+		chirps, err = cfg.DB.GetChirps(r.Context())
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+			return
+		}
 	}
 
 	var response []Chirp
@@ -221,6 +245,12 @@ func (cfg *apiConfig) handleChirps(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt: chirp.UpdatedAt.Time,
 			Body:      chirp.Body,
 			UserID:    chirp.UserID,
+		})
+	}
+
+	if sortOrder == "desc" {
+		sort.Slice(response, func(i, j int) bool {
+			return response[i].CreatedAt.After(response[j].CreatedAt)
 		})
 	}
 
@@ -321,10 +351,8 @@ func (cfg *apiConfig) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	fmt.Println(refreshToken)
 
 	user, err := cfg.DB.GetUserFromRefreshToken(r.Context(), refreshToken)
-	fmt.Println(user)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Invalid token")
 		return
@@ -463,9 +491,22 @@ func (cfg *apiConfig) handlePolkaWebhook(w http.ResponseWriter, r *http.Request)
 		} `json:"data"`
 	}
 
+	fmt.Println(r.Header.Get("Authorization"))
+
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	if apiKey != cfg.polkaKey {
+		respondWithError(w, http.StatusUnauthorized, "Invalid API Key")
+		return
+	}
+
 	var request WebhookRequest
 	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&request)
+	err = decoder.Decode(&request)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
 		return
