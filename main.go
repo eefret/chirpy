@@ -26,7 +26,10 @@ func main() {
 		Addr:    ":8080",
 	}
 
-	godotenv.Load()
+	err := godotenv.Load()
+	if err != nil {
+		panic("Error loading .env file")
+	}
 
 	cfg := &apiConfig{}
 
@@ -44,13 +47,22 @@ func main() {
 
 	mux.HandleFunc("GET /admin/metrics", cfg.handleMetrics)
 	mux.HandleFunc("POST /admin/reset", cfg.handleReset)
-
 	mux.HandleFunc("GET /api/healthz", handleHealth)
+
+	mux.HandleFunc("POST /api/login", cfg.handleLogin)
+	mux.HandleFunc("POST /api/refresh", cfg.handleRefresh)
+	mux.HandleFunc("POST /api/revoke", cfg.handleRevoke)
+
 	mux.HandleFunc("POST /api/chirps", cfg.handleCreateChirp)
-	mux.HandleFunc("POST /api/users", cfg.handleCreateUser)
+
 	mux.HandleFunc("GET /api/chirps", cfg.handleChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handleGetChirp)
-	mux.HandleFunc("POST /api/login", cfg.handleLogin)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.handleDeleteChirp)
+
+
+	mux.HandleFunc("POST /api/users", cfg.handleCreateUser)
+	mux.HandleFunc("PUT /api/users", cfg.handlePutUser)
+
 
 	println("Starting server on :8080")
 

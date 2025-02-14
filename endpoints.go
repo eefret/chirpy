@@ -18,6 +18,7 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
 	Token     string    `json:"token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
 type Chirp struct {
@@ -102,11 +103,6 @@ func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, r *http.Request) 
 		respondWithError(w, http.StatusUnauthorized, "Invalid token")
 		return
 	}
-
-	// if userID != request.UserID {
-	// 	respondWithError(w, http.StatusUnauthorized, "Unauthorized")
-	// 	return
-	// }
 
 	err = decoder.Decode(&request)
 	if err != nil {
@@ -243,7 +239,6 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 	type LoginRequest struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
-		ExpiresInSeconds int `json:"expires_in_seconds,omitempty"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -272,14 +267,26 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiration := time.Hour
-	if request.ExpiresInSeconds > 0 && request.ExpiresInSeconds <= 3600 {
-		expiration = time.Duration(request.ExpiresInSeconds) * time.Second
-	}
-
-	jwt, err := auth.MakeJWT(u.ID, cfg.authSecret, expiration)
+	jwt, err := auth.MakeJWT(u.ID, cfg.authSecret, time.Hour)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not get JWT")
+		return
+	}
+
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not generate refresh token")
+		return
+	}
+
+
+	_, err = cfg.DB.SaveRefreshToken(r.Context(), database.SaveRefreshTokenParams{
+		UserID: u.ID,
+		Token: refreshToken,
+		ExpiresAt: time.Now().Add(time.Hour * 24 * 60),
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not save refresh token")
 		return
 	}
 
@@ -289,5 +296,144 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: u.UpdatedAt.Time,
 		Email:     u.Email,
 		Token:     jwt,
+		RefreshToken: refreshToken,
 	})
+}
+
+func (cfg *apiConfig) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	fmt.Println(refreshToken)
+
+	user, err := cfg.DB.GetUserFromRefreshToken(r.Context(), refreshToken)
+	fmt.Println(user)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid token")
+		return
+	}
+
+	jwt, err := auth.MakeJWT(user.ID, cfg.authSecret, time.Hour)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not get JWT")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, struct{
+		Token string `json:"token"`
+	}{
+		Token: jwt,
+	})
+
+}
+
+func (cfg *apiConfig) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	err = cfg.DB.RevokeRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not revoke token")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) handlePutUser(w http.ResponseWriter, r *http.Request) {
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	id, err := auth.ValidateJWT(authToken, cfg.authSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid token")
+		return
+	}
+
+	type UpdateUserRequest struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	request := UpdateUserRequest{}
+
+	err = decoder.Decode(&request)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(request.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+		return
+	}
+
+	user, err := cfg.DB.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID:              id,
+		Email:           request.Email,
+		HashedPassword:  hashedPassword,
+	})
+
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not update user")
+		return
+	}
+
+
+	respondWithJSON(w, http.StatusOK, User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt.Time,
+		UpdatedAt: user.UpdatedAt.Time,
+		Email:     user.Email,
+	})
+}
+
+
+func (cfg *apiConfig) handleDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	chirpID := r.PathValue("chirpID")
+	if chirpID == "" {
+		respondWithError(w, http.StatusBadRequest, "Chirp ID is required")
+		return
+	}
+
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	id, err := auth.ValidateJWT(authToken, cfg.authSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid token")
+		return
+	}
+
+	chirp, err := cfg.DB.GetChirp(r.Context(), uuid.MustParse(chirpID))
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Chirp not found")
+		return
+	}
+
+	if chirp.UserID != id {
+		respondWithError(w, http.StatusForbidden, "You do not have permission to delete this chirp")
+		return
+	}
+
+	err = cfg.DB.DeleteChirp(r.Context(), chirp.ID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could not delete chirp")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
