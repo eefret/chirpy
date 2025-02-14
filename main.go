@@ -63,6 +63,8 @@ func main() {
 	mux.HandleFunc("POST /api/users", cfg.handleCreateUser)
 	mux.HandleFunc("PUT /api/users", cfg.handlePutUser)
 
+	mux.HandleFunc("POST /api/polka/webhooks", cfg.handlePolkaWebhook)
+
 
 	println("Starting server on :8080")
 

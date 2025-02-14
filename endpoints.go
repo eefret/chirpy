@@ -19,6 +19,7 @@ type User struct {
 	Email     string    `json:"email"`
 	Token     string    `json:"token,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
+	IsRed	 bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -38,7 +39,10 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	w.Write(dat)
+	_, err = w.Write(dat)
+	if err != nil {
+		fmt.Println("Error writing response:", err)
+	}
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -50,7 +54,10 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 
-	w.Write([]byte("OK"))
+	_, err := w.Write([]byte("OK"))
+	if err != nil {
+		fmt.Println("Error writing response:", err)
+	}
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -72,7 +79,10 @@ func (cfg *apiConfig) handleMetrics(w http.ResponseWriter, r *http.Request) {
     <p>Chirpy has been visited %d times!</p>
   </body>
 </html>`
-	w.Write([]byte(fmt.Sprintf(htmlTemplate, cfg.fileserverHits.Load())))
+	_, err := w.Write([]byte(fmt.Sprintf(htmlTemplate, cfg.fileserverHits.Load())))
+	if err != nil {
+		fmt.Println("Error writing response:", err)
+	}
 }
 
 func (cfg *apiConfig) handleReset(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +196,11 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: u.CreatedAt.Time,
 		UpdatedAt: u.UpdatedAt.Time,
 		Email:     u.Email,
+		IsRed:    u.IsRed,
 	}
+
+	fmt.Println(u)
+	fmt.Println(user)
 
 	respondWithJSON(w, http.StatusCreated, user)
 }
@@ -294,6 +308,7 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 		ID:        u.ID,
 		CreatedAt: u.CreatedAt.Time,
 		UpdatedAt: u.UpdatedAt.Time,
+		IsRed:     u.IsRed,
 		Email:     u.Email,
 		Token:     jwt,
 		RefreshToken: refreshToken,
@@ -394,6 +409,7 @@ func (cfg *apiConfig) handlePutUser(w http.ResponseWriter, r *http.Request) {
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt.Time,
 		UpdatedAt: user.UpdatedAt.Time,
+		IsRed:   user.IsRed,
 		Email:     user.Email,
 	})
 }
@@ -436,4 +452,41 @@ func (cfg *apiConfig) handleDeleteChirp(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+
+func (cfg *apiConfig) handlePolkaWebhook(w http.ResponseWriter, r *http.Request) {
+	type WebhookRequest struct {
+		Event string `json:"event"`
+		Data struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}
+
+	var request WebhookRequest
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&request)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+		return
+	}
+
+	if request.Event != "user.upgraded" {
+		respondWithJSON(w, http.StatusNoContent, nil)
+		return
+	}
+
+	userID, err := uuid.Parse(request.Data.UserID)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid User ID")
+		return
+	}
+
+	_, err = cfg.DB.UpgradeUserToRed(r.Context(), userID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Could not upgrade user")
+		return
+	}
+
+	respondWithJSON(w, http.StatusNoContent, nil)
 }
